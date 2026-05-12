@@ -188,7 +188,7 @@ static void ParseConfig(const CHAR8 *buf, UINTN size) {
 #define ROW_HINT1       (ROW_AFTER_LIST + 1)
 #define ROW_HINT2       (ROW_AFTER_LIST + 2)
 #define ROW_COUNTDOWN   (ROW_AFTER_LIST + 4)
-#define ROW_F8          (ROW_AFTER_LIST + 6)
+#define ROW_F8          (ROW_AFTER_LIST + 8)
 
 static void DrawEntry(UINTN idx, BOOLEAN isSelected) {
     /* 1. Move to the start of the row */
