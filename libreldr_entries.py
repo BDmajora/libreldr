@@ -3,6 +3,11 @@ libreldr_entries.py
 
 Single source of truth for UEFI-only libreldr boot entries.
 This generates the libreldr.conf file read by libreldr.efi.
+
+Note: libreldr.c's parser only understands `title`, `linux`, `options`,
+`timeout`, and `default`. It has no `initrd` directive — the initramfs is
+passed to the Linux EFI stub via `initrd=` inside the kernel command line,
+which is forwarded as LoadOptions when libreldr hands off via StartImage().
 """
 
 from dataclasses import dataclass
@@ -11,6 +16,15 @@ from dataclasses import dataclass
 class Entry:
     title: str
     options: str  # kernel command line
+
+# UEFI paths are relative to the root of the ESP.
+# We use backslashes here to be explicitly UEFI-compliant.
+KERNEL_PATH = r"\EFI\yetios\vmlinuz.efi"
+INITRD_PATH = r"\EFI\yetios\initramfs.img"
+
+# Common initrd= argument appended to every entry's command line so the
+# Linux EFI stub locates the initramfs on the ESP at hand-off.
+_INITRD_ARG = f"initrd={INITRD_PATH}"
 
 # Defined entries for the boot menu
 ENTRIES = [
@@ -24,10 +38,6 @@ ENTRIES = [
 TIMEOUT_SECONDS = 5
 DEFAULT_INDEX = 0
 
-# UEFI paths are relative to the root of the ESP.
-# We use backslashes here to be explicitly UEFI-compliant.
-KERNEL_PATH = r"\EFI\yetios\vmlinuz.efi"
-INITRD_PATH = r"\EFI\yetios\initramfs.img"
 
 def render_libreldr_conf() -> str:
     """
@@ -42,14 +52,16 @@ def render_libreldr_conf() -> str:
         f"default {DEFAULT_INDEX}",
         "",
     ]
-    
+
     for e in ENTRIES:
+        # Always prepend the initrd= argument; the Linux EFI stub reads it
+        # from its LoadOptions and pulls the initramfs from the ESP.
+        full_options = f"{_INITRD_ARG} {e.options}"
         lines += [
             f"title {e.title}",
             f"linux {KERNEL_PATH}",
-            f"initrd {INITRD_PATH}",
-            f"options {e.options}",
+            f"options {full_options}",
             "",
         ]
-    
+
     return "\n".join(lines)
