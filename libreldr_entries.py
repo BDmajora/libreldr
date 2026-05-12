@@ -51,26 +51,21 @@ def render_libreldr_conf() -> str:
 
 
 def render_syslinux_cfg() -> str:
-    """BIOS config consumed by syslinux/menu.c32, themed to mirror FreeLdr MinimalUI.
-
-    syslinux menu.c32 layout constraints vs ReactOS FreeLdr:
-      - Highlight bar always spans MENU WIDTH (no text-hugging).
-        We set WIDTH to longest_entry + 4 to keep it tight.
-      - TABMSG is a single line; ReactOS has two lines.
-        We combine them: "Use ^ and v ... Press ENTER to choose."
-      - F8 footer: menu.c32 has no "footer" directive.
-        We place it as a MENU DISABLED entry after a separator.
-    """
-    longest = max(len(e.title) for e in ENTRIES)
-    # Highlight bar: 4-space indent + title + 2 pad
-    bar_width = longest + 6
-
+    """BIOS config consumed by syslinux/menu.c32, themed to mirror FreeLdr MinimalUI."""
     num = len(ENTRIES)
-    # Row math: title at row 0, entries start row 2, then status text below.
-    tabmsg_row   = num + 3
-    timeout_row  = num + 5
-    # Total entry rows includes real entries + separator + F8 disabled label.
-    menu_rows    = num + 3  # entries + separator + blank + F8 line
+
+    # Row layout (0-indexed):
+    #   row 0:  MENU TITLE
+    #   row 1:  blank
+    #   rows 2..2+num-1: entries
+    #   row 2+num:   blank
+    #   row 2+num+1: "Use ^ and v to move the highlight to your choice."
+    #   row 2+num+2: "Press ENTER to choose."
+    #   row 2+num+3: blank
+    #   row 2+num+4: "Seconds until highlighted choice..."
+    entries_start = 2
+    tabmsg_row    = entries_start + num + 1       # "Use ^ and v..."
+    timeout_row   = tabmsg_row + 3                # countdown, 2 rows below tabmsg
 
     lines = [
         "# libreldr -- BIOS configuration (syslinux/menu.c32)",
@@ -82,21 +77,21 @@ def render_syslinux_cfg() -> str:
         "PROMPT 0",
         "",
         # --- Layout ---
+        # Title at col 0, row 0. Wide enough to never clip.
         "MENU TITLE Please select the operating system to start:",
         "MENU CLEAR",
-        f"MENU ROWS {menu_rows}",
+        f"MENU ROWS {num}",
         f"MENU TABMSGROW {tabmsg_row}",
         f"MENU TIMEOUTROW {timeout_row}",
         "",
-        # Left-align everything.
+        # Left side of the screen, with ReactOS-like 4-space indent.
         "MENU VSHIFT 0",
         "MENU HSHIFT 0",
-        f"MENU WIDTH {bar_width}",
-        "MENU MARGIN 4",
-        "MENU INDENT 0",
+        "MENU WIDTH 78",      # full-width enough that title never clips
+        "MENU MARGIN 4",      # 4-space indent before entries
+        "MENU HIDDEN",        # hide title row's default decoration
         "",
-        # --- Colors: black bg, light-gray text, inverse highlight ---
-        # Format: attr foreground background shadow
+        # --- Colors: black bg, light-gray fg, inverse highlight ---
         "MENU COLOR screen       37;40  #ffaaaaaa #00000000 none",
         "MENU COLOR border       30;40  #00000000 #00000000 none",
         "MENU COLOR title        37;40  #ffaaaaaa #00000000 none",
@@ -109,11 +104,14 @@ def render_syslinux_cfg() -> str:
         "MENU COLOR timeout      37;40  #ffaaaaaa #00000000 none",
         "MENU COLOR help         37;40  #ffaaaaaa #00000000 none",
         "MENU COLOR disabled     37;40  #ffaaaaaa #00000000 none",
+        "MENU COLOR cmdmark      37;40  #ffaaaaaa #00000000 none",
+        "MENU COLOR cmdline      37;40  #ffaaaaaa #00000000 none",
         "MENU COLOR scrollbar    37;40  #00000000 #00000000 none",
         "",
         # --- Status text ---
-        # ReactOS has two lines; menu.c32 TABMSG is one line.
-        "MENU TABMSG Use ^ and v to move the highlight to your choice. Press ENTER to choose.",
+        # menu.c32 only supports a SINGLE-LINE tabmsg. ReactOS has two lines.
+        # We accept this limitation and put both phrases on one line.
+        "MENU TABMSG Use ^ and v to move the highlight to your choice.  Press ENTER to choose.",
         "MENU TIMEOUTMSG Seconds until highlighted choice will be started automatically: #",
         "",
     ]
@@ -128,15 +126,5 @@ def render_syslinux_cfg() -> str:
             f"    APPEND {e.options}",
             "",
         ]
-
-    # --- F8 footer as a disabled entry after a separator ---
-    lines += [
-        "MENU SEPARATOR",
-        "",
-        "LABEL f8_hint",
-        "    MENU LABEL For troubleshooting and advanced startup options for YetiOS, press F8.",
-        "    MENU DISABLED",
-        "",
-    ]
 
     return "\n".join(lines)
