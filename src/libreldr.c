@@ -1,6 +1,23 @@
 /*
  * libreldr — a UEFI-only bootloader for YetiOS.
  * Hand-off model: Loads Linux kernels via the EFI stub (LoadImage + StartImage).
+ *
+ * UI layout (matches ReactOS FreeLoader style):
+ *
+ *   line 0:   "Please select the operating system to start:"
+ *   line 2+i: "  <title>"   (selected entry gets ATTR_SELECTED highlight)
+ *   line 2+N+1: ""
+ *   line 2+N+2: "Use ↑ and ↓ to move the highlight to your choice."
+ *   line 2+N+3: "Press ENTER to choose."
+ *   line 2+N+4: ""
+ *   line 2+N+5: "Seconds until highlighted choice will be started automatically: N"
+ *               (hidden when user has interacted)
+ *   line 2+N+7: "For troubleshooting and advanced startup options for YetiOS,"
+ *   line 2+N+8: "press F8."
+ *
+ * Flicker-free: DrawMenuFull() draws everything once on entry and on any
+ * selection change.  DrawMenuTimer() only overwrites the countdown line,
+ * avoiding a full ClearScreen on every tick.
  */
 
 #include <efi.h>
@@ -60,6 +77,21 @@ static INTN ParseInt(const CHAR8 *s, UINTN len) {
         v = v * 10 + (s[i] - '0');
     }
     return neg ? -v : v;
+}
+
+/* Print a string padded or truncated to exactly `width` chars. */
+static void PrintPadded(const CHAR16 *s, UINTN width) {
+    UINTN len = 0;
+    const CHAR16 *p = s;
+    while (*p++) len++;
+
+    for (UINTN i = 0; i < len && i < width; i++) {
+        CHAR16 buf[2] = { s[i], 0 };
+        uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, buf);
+    }
+    for (UINTN i = len; i < width; i++) {
+        uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, L" ");
+    }
 }
 
 /* -------------------------------------------------------------------- */
@@ -160,41 +192,94 @@ static void ParseConfig(const CHAR8 *buf, UINTN size) {
 }
 
 /* -------------------------------------------------------------------- */
-/* UI & Execution                                                       */
+/* UI                                                                   */
 /* -------------------------------------------------------------------- */
 
 #define ATTR_NORMAL    EFI_TEXT_ATTR(EFI_LIGHTGRAY, EFI_BLACK)
 #define ATTR_SELECTED  EFI_TEXT_ATTR(EFI_BLACK,     EFI_LIGHTGRAY)
 
-static void DrawMenu(UINTN selected, INTN remaining) {
+/* Row layout helpers — all positions derived from gEntryCount. */
+#define ROW_HEADER      0
+#define ROW_FIRST_ENTRY 2
+#define ROW_AFTER_LIST  (ROW_FIRST_ENTRY + gEntryCount)
+#define ROW_HINT1       (ROW_AFTER_LIST + 1)
+#define ROW_HINT2       (ROW_AFTER_LIST + 2)
+#define ROW_COUNTDOWN   (ROW_AFTER_LIST + 4)
+#define ROW_F8A         (ROW_AFTER_LIST + 6)
+#define ROW_F8B         (ROW_AFTER_LIST + 7)
+
+/* Width to clear/pad when overwriting a line in-place (avoids ClearScreen). */
+#define LINE_WIDTH      79
+
+static void DrawMenuFull(UINTN selected) {
     uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
-    uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
+    uefi_call_wrapper(ST->ConOut->ClearScreen,  1, ST->ConOut);
     uefi_call_wrapper(ST->ConOut->EnableCursor, 2, ST->ConOut, FALSE);
 
-    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, 0);
-    uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, L"Please select the operating system to start:");
+    /* Header */
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, ROW_HEADER);
+    uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut,
+        L"Please select the operating system to start:");
 
+    /* Entry list */
     for (UINTN i = 0; i < gEntryCount; i++) {
-        uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, 2 + i);
-        uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, L"        ");
+        uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut,
+                          0, ROW_FIRST_ENTRY + i);
         if (i == selected) {
             uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_SELECTED);
-            uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, gEntries[i].Title);
+            PrintPadded(gEntries[i].Title, LINE_WIDTH);
             uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
         } else {
+            uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, L"  ");
             uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, gEntries[i].Title);
         }
     }
 
-    UINTN r = 2 + gEntryCount;
-    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, r + 1);
-    uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, L"Use \x2191 and \x2193 to move highlight. ENTER to boot.");
+    /* Navigation hints */
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, ROW_HINT1);
+    uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut,
+        L"Use \x2191 and \x2193 to move the highlight to your choice.");
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, ROW_HINT2);
+    uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut,
+        L"Press ENTER to choose.");
 
+    /* F8 hint */
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, ROW_F8A);
+    uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut,
+        L"For troubleshooting and advanced startup options for YetiOS, press F8.");
+}
+
+/* Redraw only the countdown line — no ClearScreen, no flicker. */
+static void DrawMenuTimer(INTN remaining) {
+    uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, ROW_COUNTDOWN);
     if (remaining >= 0) {
-        uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, r + 3);
-        Print(L"Automatic boot in: %d", remaining);
+        /* Print the line then pad to erase any leftover digit from a wider number. */
+        Print(L"Seconds until highlighted choice will be started automatically: %d  ",
+              remaining);
+    } else {
+        /* User interacted — erase the countdown line entirely. */
+        PrintPadded(L"", LINE_WIDTH);
     }
 }
+
+/* Redraw only the entry that changed selection — no ClearScreen. */
+static void RedrawEntry(UINTN idx, BOOLEAN isSelected) {
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut,
+                      0, ROW_FIRST_ENTRY + idx);
+    if (isSelected) {
+        uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_SELECTED);
+        PrintPadded(gEntries[idx].Title, LINE_WIDTH);
+        uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
+    } else {
+        uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, L"  ");
+        PrintPadded(gEntries[idx].Title, LINE_WIDTH - 2);
+    }
+}
+
+/* -------------------------------------------------------------------- */
+/* Boot execution                                                       */
+/* -------------------------------------------------------------------- */
 
 static EFI_STATUS BootEntryRun(EFI_HANDLE ImageHandle, BootEntry *entry) {
     EFI_STATUS Status;
@@ -202,16 +287,19 @@ static EFI_STATUS BootEntryRun(EFI_HANDLE ImageHandle, BootEntry *entry) {
     EFI_DEVICE_PATH  *DevicePath;
     EFI_HANDLE        NewImage;
 
-    Status = uefi_call_wrapper(BS->HandleProtocol, 3, ImageHandle, &LoadedImageProtocol, (VOID **)&LoadedImage);
+    Status = uefi_call_wrapper(BS->HandleProtocol, 3, ImageHandle,
+                               &LoadedImageProtocol, (VOID **)&LoadedImage);
     if (EFI_ERROR(Status)) return Status;
 
     DevicePath = FileDevicePath(LoadedImage->DeviceHandle, entry->Kernel);
     if (!DevicePath) return EFI_OUT_OF_RESOURCES;
 
-    Status = uefi_call_wrapper(BS->LoadImage, 6, FALSE, ImageHandle, DevicePath, NULL, 0, &NewImage);
+    Status = uefi_call_wrapper(BS->LoadImage, 6, FALSE, ImageHandle,
+                               DevicePath, NULL, 0, &NewImage);
     if (EFI_ERROR(Status)) return Status;
 
-    Status = uefi_call_wrapper(BS->HandleProtocol, 3, NewImage, &LoadedImageProtocol, (VOID **)&LoadedImage);
+    Status = uefi_call_wrapper(BS->HandleProtocol, 3, NewImage,
+                               &LoadedImageProtocol, (VOID **)&LoadedImage);
     if (EFI_ERROR(Status)) return Status;
 
     LoadedImage->LoadOptions     = entry->Options;
@@ -220,20 +308,28 @@ static EFI_STATUS BootEntryRun(EFI_HANDLE ImageHandle, BootEntry *entry) {
     return uefi_call_wrapper(BS->StartImage, 3, NewImage, NULL, NULL);
 }
 
+/* -------------------------------------------------------------------- */
+/* Entry point                                                          */
+/* -------------------------------------------------------------------- */
+
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     InitializeLib(ImageHandle, SystemTable);
 
+    /* Pick the highest-resolution text mode available. */
     UINTN best_mode = 0, best_area = 0;
     for (UINTN m = 0; m < (UINTN)ST->ConOut->Mode->MaxMode; m++) {
         UINTN c, r;
-        if (uefi_call_wrapper(ST->ConOut->QueryMode, 4, ST->ConOut, m, &c, &r) == EFI_SUCCESS && c * r > best_area) {
-            best_area = c * r; best_mode = m;
+        if (uefi_call_wrapper(ST->ConOut->QueryMode, 4, ST->ConOut, m, &c, &r) == EFI_SUCCESS
+                && c * r > best_area) {
+            best_area = c * r;
+            best_mode = m;
         }
     }
     uefi_call_wrapper(ST->ConOut->SetMode, 2, ST->ConOut, best_mode);
     uefi_call_wrapper(ST->ConOut->QueryMode, 4, ST->ConOut, best_mode, &gCols, &gRows);
 
-    CHAR8 *cfgBuf = NULL;
+    /* Load configuration. */
+    CHAR8 *cfgBuf  = NULL;
     UINTN  cfgSize = 0;
     if (ReadConfigFile(ImageHandle, &cfgBuf, &cfgSize) == EFI_SUCCESS) {
         ParseConfig(cfgBuf, cfgSize);
@@ -245,6 +341,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     UINTN selected  = gDefault;
     INTN  remaining = gTimeout;
 
+    /* Initial full draw. */
+    DrawMenuFull(selected);
+    DrawMenuTimer(remaining);
+
+    /* 1-second periodic timer. */
     EFI_EVENT timer;
     uefi_call_wrapper(BS->CreateEvent, 5, EVT_TIMER, 0, NULL, NULL, &timer);
     uefi_call_wrapper(BS->SetTimer, 3, timer, TimerPeriodic, 10000000ULL);
@@ -252,22 +353,42 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 
     for (;;) {
         UINTN idx;
-        DrawMenu(selected, remaining);
         uefi_call_wrapper(BS->WaitForEvent, 3, 2, events, &idx);
 
         if (idx == 1) {
-            if (remaining > 0) remaining--;
-            else if (remaining == 0) break;
+            /* Timer tick — update only the countdown line. */
+            if (remaining > 0) {
+                remaining--;
+                DrawMenuTimer(remaining);
+            } else if (remaining == 0) {
+                break;
+            }
             continue;
         }
 
+        /* Keypress — stop countdown, handle navigation. */
         EFI_INPUT_KEY key;
-        if (uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &key) != EFI_SUCCESS) continue;
-        remaining = -1;
+        if (uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &key) != EFI_SUCCESS)
+            continue;
 
-        if (key.ScanCode == SCAN_UP) selected = (selected == 0) ? gEntryCount - 1 : selected - 1;
-        else if (key.ScanCode == SCAN_DOWN) selected = (selected + 1) % gEntryCount;
-        else if (key.UnicodeChar == CHAR_CARRIAGE_RETURN) break;
+        if (remaining >= 0) {
+            remaining = -1;
+            DrawMenuTimer(-1);   /* erase countdown line */
+        }
+
+        if (key.ScanCode == SCAN_UP) {
+            UINTN prev = selected;
+            selected = (selected == 0) ? gEntryCount - 1 : selected - 1;
+            RedrawEntry(prev,     FALSE);
+            RedrawEntry(selected, TRUE);
+        } else if (key.ScanCode == SCAN_DOWN) {
+            UINTN prev = selected;
+            selected = (selected + 1) % gEntryCount;
+            RedrawEntry(prev,     FALSE);
+            RedrawEntry(selected, TRUE);
+        } else if (key.UnicodeChar == CHAR_CARRIAGE_RETURN) {
+            break;
+        }
     }
 
     uefi_call_wrapper(BS->CloseEvent, 1, timer);
@@ -275,7 +396,15 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 
     EFI_STATUS Status = BootEntryRun(ImageHandle, &gEntries[selected]);
     Print(L"Boot failed: %r\n", Status);
-    
+
+    /* Cold reset after 5 seconds so the user can read the error. */
+    EFI_EVENT pause;
+    uefi_call_wrapper(BS->CreateEvent, 5, EVT_TIMER, 0, NULL, NULL, &pause);
+    uefi_call_wrapper(BS->SetTimer, 3, pause, TimerRelative, 50000000ULL);
+    UINTN dummy;
+    uefi_call_wrapper(BS->WaitForEvent, 3, 1, &pause, &dummy);
+    uefi_call_wrapper(BS->CloseEvent, 1, pause);
+
     uefi_call_wrapper(RT->ResetSystem, 4, EfiResetCold, EFI_SUCCESS, 0, NULL);
     return EFI_SUCCESS;
 }
