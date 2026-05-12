@@ -191,23 +191,40 @@ static void ParseConfig(const CHAR8 *buf, UINTN size) {
 #define ROW_F8          (ROW_AFTER_LIST + 6)
 
 static void DrawEntry(UINTN idx, BOOLEAN isSelected) {
-    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut,
+    /* 1. Move to the start of the row */
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 
                       0, ROW_FIRST_ENTRY + idx);
 
-    /* Clear the line first so a previous longer title doesn't leave
-     * stale characters behind when we redraw a shorter one. */
+    /* 2. Clear the line in NORMAL colors first. 
+     * This ensures that if we draw a short highlight bar, the rest of the 
+     * line doesn't stay grey from a previous selection. */
+    uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
     UINTN clearWidth = (gCols > 0 && gCols < 80) ? gCols : 80;
     for (UINTN i = 0; i < clearWidth; i++) PutCh(L' ');
-    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut,
+
+    /* 3. Return to Column 0 to draw the highlighted or unhighlighted entry */
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 
                       0, ROW_FIRST_ENTRY + idx);
 
     if (isSelected) {
-        /* Selected: no indent, highlight bar = exactly the title length. */
+        /* FIX FOR LEFT PADDING: Set the attribute BEFORE printing anything. 
+         * This ensures the leading spaces (the indent) are colored grey. */
         uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_SELECTED);
+
+        /* FIX FOR WARPING: Print the indent even when selected. 
+         * This keeps the text locked in its column so it doesn't shift left. */
+        Spaces(ENTRY_INDENT);
+
+        /* Print the title */
         uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, gEntries[idx].Title);
+
+        /* Optional: Add one space of padding to the right of the text for symmetry */
+        PutCh(L' ');
+
+        /* Reset attribute so subsequent drawing isn't highlighted */
         uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
     } else {
-        /* Unselected: 2-space indent, plain text. */
+        /* Unselected: Print the same indent to maintain vertical alignment */
         Spaces(ENTRY_INDENT);
         uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, gEntries[idx].Title);
     }
