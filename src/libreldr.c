@@ -195,36 +195,29 @@ static void DrawEntry(UINTN idx, BOOLEAN isSelected) {
     uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 
                       0, ROW_FIRST_ENTRY + idx);
 
-    /* 2. Clear the line in NORMAL colors first. 
-     * This ensures that if we draw a short highlight bar, the rest of the 
-     * line doesn't stay grey from a previous selection. */
+    /* 2. Clear the line in NORMAL colors first */
     uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
     UINTN clearWidth = (gCols > 0 && gCols < 80) ? gCols : 80;
     for (UINTN i = 0; i < clearWidth; i++) PutCh(L' ');
 
-    /* 3. Return to Column 0 to draw the highlighted or unhighlighted entry */
+    /* 3. Return to Column 0 */
     uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 
                       0, ROW_FIRST_ENTRY + idx);
 
     if (isSelected) {
-        /* FIX FOR LEFT PADDING: Set the attribute BEFORE printing anything. 
-         * This ensures the leading spaces (the indent) are colored grey. */
+        /* Set highlight BEFORE the indent to get that left-side padding */
         uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_SELECTED);
 
-        /* FIX FOR WARPING: Print the indent even when selected. 
-         * This keeps the text locked in its column so it doesn't shift left. */
+        /* Print indent (keeps text from warping) */
         Spaces(ENTRY_INDENT);
 
-        /* Print the title */
+        /* Print the title string ONLY */
         uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, gEntries[idx].Title);
 
-        /* Optional: Add one space of padding to the right of the text for symmetry */
-        PutCh(L' ');
-
-        /* Reset attribute so subsequent drawing isn't highlighted */
+        /* IMMEDIATELY reset attribute - this removes the right-side buffer */
         uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
     } else {
-        /* Unselected: Print the same indent to maintain vertical alignment */
+        /* Unselected: Indent + Title in normal colors */
         Spaces(ENTRY_INDENT);
         uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, gEntries[idx].Title);
     }
