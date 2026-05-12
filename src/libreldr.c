@@ -314,50 +314,63 @@ static void ParseConfig(const CHAR8 *buf, UINTN size) {
 #define ROW_F8          (ROW_AFTER_LIST + 6)
 
 static void DrawEntry(UINTN idx, BOOLEAN isSelected) {
+    UINTN row = ROW_FIRST_ENTRY + idx;
+
     uefi_call_wrapper(ST->ConOut->SetCursorPosition,
                       3,
                       ST->ConOut,
                       0,
-                      ROW_FIRST_ENTRY + idx);
+                      row);
 
-    /* Clear the line first */
+    /* Clear entire row */
     UINTN clearWidth =
         (gCols > 0 && gCols < 80) ? gCols : 80;
 
     for (UINTN i = 0; i < clearWidth; i++)
         PutCh(L' ');
 
-    uefi_call_wrapper(ST->ConOut->SetCursorPosition,
-                      3,
-                      ST->ConOut,
-                      0,
-                      ROW_FIRST_ENTRY + idx);
-
     if (isSelected) {
+        /*
+         * ReactOS / NTLDR style:
+         *
+         * - text stays aligned with normal entries
+         * - highlight begins ONE CELL earlier
+         * - highlight width = title width + padding
+         */
+
+        uefi_call_wrapper(ST->ConOut->SetCursorPosition,
+                          3,
+                          ST->ConOut,
+                          ENTRY_INDENT - 1,
+                          row);
+
         uefi_call_wrapper(ST->ConOut->SetAttribute,
                           2,
                           ST->ConOut,
                           ATTR_SELECTED);
 
-        /* Highlighted indent */
-        Spaces(ENTRY_INDENT);
+        /* Left highlighted padding */
+        PutCh(L' ');
 
-        /* Highlighted title */
+        /* Title itself */
         uefi_call_wrapper(ST->ConOut->OutputString,
                           2,
                           ST->ConOut,
                           gEntries[idx].Title);
 
-        /* Small trailing padding like NTLDR */
-        Spaces(1);
+        /* Right highlighted padding */
+        PutCh(L' ');
 
         uefi_call_wrapper(ST->ConOut->SetAttribute,
                           2,
                           ST->ConOut,
                           ATTR_NORMAL);
     } else {
-        /* Normal entries remain indented */
-        Spaces(ENTRY_INDENT);
+        uefi_call_wrapper(ST->ConOut->SetCursorPosition,
+                          3,
+                          ST->ConOut,
+                          ENTRY_INDENT,
+                          row);
 
         uefi_call_wrapper(ST->ConOut->OutputString,
                           2,
