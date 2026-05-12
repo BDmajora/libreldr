@@ -268,47 +268,50 @@ DrawMenu(UINTN selected, INTN remaining)
     uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
     uefi_call_wrapper(ST->ConOut->EnableCursor, 2, ST->ConOut, FALSE);
 
-    GotoXY(0, 1);
+    /* Match ReactOS layout exactly: no top padding, 4-space indent. */
+    GotoXY(0, 0);
     PutS(L"Please select the operating system to start:");
 
-    UINTN row = 3;
+    /* Entries start at row 2 (one blank line after header). */
+    UINTN row = 2;
     for (UINTN i = 0; i < gEntryCount; i++) {
         GotoXY(0, row + i);
         PutS(L"    ");
         if (i == selected) {
             SetAttr(ATTR_SELECTED);
             PutS(gEntries[i].Title);
-            UINTN tlen = StrLen(gEntries[i].Title);
-            UINTN bar  = (tlen < 36) ? 36 - tlen : 1;
-            for (UINTN k = 0; k < bar; k++) PutS(L" ");
+            /* Highlight bar exactly matches title width — no padding. */
             SetAttr(ATTR_NORMAL);
         } else {
             PutS(gEntries[i].Title);
         }
     }
 
-    UINTN after = row + gEntryCount + 1;
+    /* Layout below entries, with absolute rows so screens of any height work. */
+    UINTN r = row + gEntryCount + 1;
 
-    GotoXY(0, after);
-    PutS(L"Use \x2191 and \x2193 to move the highlight to your choice.");
-    GotoXY(0, after + 1);
+    GotoXY(0, r);
+    PutS(L"Use ");
+    SetAttr(ATTR_NORMAL);
+    PutS(L"\x2191");
+    PutS(L" and ");
+    PutS(L"\x2193");
+    PutS(L" to move the highlight to your choice.");
+
+    GotoXY(0, r + 1);
     PutS(L"Press ENTER to choose.");
 
-    GotoXY(0, after + 3);
+    GotoXY(0, r + 3);
     if (remaining >= 0) {
-        CHAR16 buf[128];
+        CHAR16 buf[160];
         SPrint(buf, sizeof(buf),
-               L"Seconds until highlighted choice will be started automatically: %d  ",
+               L"Seconds until highlighted choice will be started automatically: %d",
                remaining);
         PutS(buf);
-    } else {
-        for (UINTN k = 0; k < gCols; k++) PutS(L" ");
     }
 
-    if (gRows > 4) {
-        GotoXY(0, gRows - 3);
-        PutS(L"For troubleshooting and advanced startup options for YetiOS, press F8.");
-    }
+    GotoXY(0, r + 6);
+    PutS(L"For troubleshooting and advanced startup options for YetiOS, press F8.");
 }
 
 /* -------------------------------------------------------------------- */
