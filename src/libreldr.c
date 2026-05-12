@@ -2,8 +2,8 @@
  * libreldr — a UEFI bootloader for YetiOS that pixel-matches
  * ReactOS FreeLdr's MinimalUI (NTLDR-style) boot menu.
  *
- * NOTE: This is the UEFI half of libreldr. The BIOS half is a
- * libreldr-themed syslinux install — see README.md.
+ * NOTE: This is the UEFI half of libreldr. The BIOS half is libreldr.c32,
+ * a custom syslinux com32 module — see src/libreldr_bios.c.
  *
  * Hand-off model (UEFI): we don't reimplement the Linux boot protocol.
  * Linux kernels since 3.3 are themselves valid PE/COFF EFI applications
@@ -16,6 +16,7 @@
  * Config format (one entry per stanza, blank line separated):
  *   title YetiOS
  *   linux \EFI\yetios\vmlinuz.efi
+ *   initrd \EFI\yetios\initramfs.img   (parsed but unused on UEFI)
  *   options root=LABEL=yetios-root ro quiet
  *
  * Global keys (before first 'title'):
@@ -217,6 +218,13 @@ ParseConfig(const CHAR8 *buf, UINTN size)
             }
         } else if (StrEqA(line, k, "options")) {
             if (cur) AsciiToUcs2(val, vallen, cur->Options, MAX_OPTS);
+        } else if (StrEqA(line, k, "initrd")) {
+            /* UEFI side: parse-and-discard. The Linux EFI stub finds the
+             * initramfs via the 'initrd=' kernel parameter in `options`,
+             * or via LINUX_EFI_INITRD_MEDIA_GUID if added later. We only
+             * recognize the key so the shared BIOS+UEFI config doesn't
+             * trip an unknown-keyword path. */
+            (void)val; (void)vallen;
         }
     }
 }
