@@ -268,40 +268,34 @@ DrawMenu(UINTN selected, INTN remaining)
     uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
     uefi_call_wrapper(ST->ConOut->EnableCursor, 2, ST->ConOut, FALSE);
 
-    /* Match ReactOS layout exactly: no top padding, 4-space indent. */
+    /* Row 0: header, left-aligned. */
     GotoXY(0, 0);
     PutS(L"Please select the operating system to start:");
 
-    /* Entries start at row 2 (one blank line after header). */
+    /* Row 2+: entries, 8-space indent like ReactOS. */
     UINTN row = 2;
     for (UINTN i = 0; i < gEntryCount; i++) {
         GotoXY(0, row + i);
-        PutS(L"    ");
+        PutS(L"        ");
         if (i == selected) {
             SetAttr(ATTR_SELECTED);
             PutS(gEntries[i].Title);
-            /* Highlight bar exactly matches title width — no padding. */
             SetAttr(ATTR_NORMAL);
         } else {
             PutS(gEntries[i].Title);
         }
     }
 
-    /* Layout below entries, with absolute rows so screens of any height work. */
-    UINTN r = row + gEntryCount + 1;
+    UINTN r = row + gEntryCount;
 
-    GotoXY(0, r);
-    PutS(L"Use ");
-    SetAttr(ATTR_NORMAL);
-    PutS(L"\x2191");
-    PutS(L" and ");
-    PutS(L"\x2193");
-    PutS(L" to move the highlight to your choice.");
-
+    /* "Use ↑ and ↓ ..." on its own line, "Press ENTER..." on the next. */
     GotoXY(0, r + 1);
+    PutS(L"Use \x2191 and \x2193 to move the highlight to your choice.");
+    GotoXY(0, r + 2);
     PutS(L"Press ENTER to choose.");
 
-    GotoXY(0, r + 3);
+    /* Countdown line with a blank line gap. */
+    GotoXY(0, r + 4);
     if (remaining >= 0) {
         CHAR16 buf[160];
         SPrint(buf, sizeof(buf),
@@ -310,7 +304,8 @@ DrawMenu(UINTN selected, INTN remaining)
         PutS(buf);
     }
 
-    GotoXY(0, r + 6);
+    /* F8 hint pinned to the bottom of the screen, like ReactOS. */
+    GotoXY(0, gRows - 2);
     PutS(L"For troubleshooting and advanced startup options for YetiOS, press F8.");
 }
 
