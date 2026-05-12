@@ -28,20 +28,12 @@ static UINTN     gEntryCount = 0;
 static UINTN     gDefault    = 0;
 static INTN      gTimeout    = 10;
 static UINTN     gCols, gRows;
-static UINTN     gHighlightWidth = 0;
 
 #define ENTRY_INDENT       2
-#define HIGHLIGHT_PADDING  4
 
 /* -------------------------------------------------------------------- */
 /* Helpers                                                              */
 /* -------------------------------------------------------------------- */
-
-static UINTN StrLen16(const CHAR16 *s) {
-    UINTN n = 0;
-    while (*s++) n++;
-    return n;
-}
 
 static BOOLEAN StrEqA(const CHAR8 *s, UINTN len, const char *kw) {
     UINTN kwlen = 0;
@@ -198,41 +190,26 @@ static void ParseConfig(const CHAR8 *buf, UINTN size) {
 #define ROW_COUNTDOWN   (ROW_AFTER_LIST + 4)
 #define ROW_F8          (ROW_AFTER_LIST + 6)
 
-/* Highlight bar = widest title + padding, clamped to fit on the line. */
-static void ComputeHighlightWidth(void) {
-    UINTN maxLen = 0;
-    for (UINTN i = 0; i < gEntryCount; i++) {
-        UINTN n = StrLen16(gEntries[i].Title);
-        if (n > maxLen) maxLen = n;
-    }
-    UINTN w = maxLen + HIGHLIGHT_PADDING;
-    UINTN avail = (gCols > ENTRY_INDENT + 1) ? gCols - ENTRY_INDENT - 1 : 0;
-    if (w > avail) w = avail;
-    gHighlightWidth = w;
-}
-
 static void DrawEntry(UINTN idx, BOOLEAN isSelected) {
     uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut,
                       0, ROW_FIRST_ENTRY + idx);
-    Spaces(ENTRY_INDENT);
+
+    /* Clear the line first so a previous longer title doesn't leave
+     * stale characters behind when we redraw a shorter one. */
+    UINTN clearWidth = (gCols > 0 && gCols < 80) ? gCols : 80;
+    for (UINTN i = 0; i < clearWidth; i++) PutCh(L' ');
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut,
+                      0, ROW_FIRST_ENTRY + idx);
 
     if (isSelected) {
+        /* Selected: no indent, highlight bar = exactly the title length. */
         uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_SELECTED);
-    }
-
-    UINTN written = 0;
-    CHAR16 *t = gEntries[idx].Title;
-    while (*t && written < gHighlightWidth) {
-        PutCh(*t++);
-        written++;
-    }
-    while (written < gHighlightWidth) {
-        PutCh(L' ');
-        written++;
-    }
-
-    if (isSelected) {
+        uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, gEntries[idx].Title);
         uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
+    } else {
+        /* Unselected: 2-space indent, plain text. */
+        Spaces(ENTRY_INDENT);
+        uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, gEntries[idx].Title);
     }
 }
 
@@ -334,8 +311,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     }
 
     if (gEntryCount == 0) return EFI_NOT_FOUND;
-
-    ComputeHighlightWidth();
 
     UINTN selected  = gDefault;
     INTN  remaining = gTimeout;
