@@ -2,18 +2,13 @@
  * libreldr — a UEFI bootloader for YetiOS that pixel-matches
  * ReactOS FreeLdr's MinimalUI (NTLDR-style) boot menu.
  *
- * NOTE: This is the UEFI half of libreldr. The BIOS half is provided
- * by a libreldr-themed syslinux install — see README.md. The user-
- * facing branding is the same on both; only the firmware-level entry
- * differs. yeti-build's Stage 7 installs whichever the image needs.
+ * NOTE: This is the UEFI half of libreldr. The BIOS half is a
+ * libreldr-themed syslinux install — see README.md.
  *
  * Hand-off model (UEFI): we don't reimplement the Linux boot protocol.
  * Linux kernels since 3.3 are themselves valid PE/COFF EFI applications
  * (the "EFI stub"), so we just LoadImage + StartImage them with the
  * cmdline passed via LoadOptions.
- *
- * Build: see Makefile. Output: libreldr.efi -> install as
- *   /EFI/BOOT/BOOTX64.EFI  on the ESP.
  *
  * Config file (on same volume as the .efi):
  *   /EFI/libreldr/libreldr.conf
@@ -30,6 +25,10 @@
 
 #include <efi.h>
 #include <efilib.h>
+
+/* gnu-efi already defines globals ST, BS, RT via efilib.h (and macros
+ * gST, gBS, gRT pointing at them). We use those directly instead of
+ * declaring our own — saves us from name collisions. */
 
 #define MAX_ENTRIES   16
 #define MAX_TITLE     128
@@ -48,11 +47,11 @@ static UINTN     gEntryCount = 0;
 static UINTN     gDefault    = 0;
 static INTN      gTimeout    = 10;
 
-static EFI_SYSTEM_TABLE             *gST;
-static EFI_BOOT_SERVICES            *gBS;
-static SIMPLE_TEXT_OUTPUT_INTERFACE *gOut;
-static SIMPLE_INPUT_INTERFACE       *gIn;
 static UINTN gCols, gRows;
+
+/* Shorthand for the gnu-efi-provided globals. */
+#define gOutP   (ST->ConOut)
+#define gInP    (ST->ConIn)
 
 /* -------------------------------------------------------------------- */
 /* Tiny string helpers (no libc in EFI)                                 */
@@ -113,11 +112,11 @@ ReadConfigFile(EFI_HANDLE ImageHandle, CHAR8 **buf, UINTN *size)
     EFI_FILE_HANDLE        Root, File;
     EFI_GUID FsGuid = SIMPLE_FILE_SYSTEM_PROTOCOL;
 
-    Status = uefi_call_wrapper(gBS->HandleProtocol, 3, ImageHandle,
+    Status = uefi_call_wrapper(BS->HandleProtocol, 3, ImageHandle,
                                &LoadedImageProtocol, (VOID **)&LoadedImage);
     if (EFI_ERROR(Status)) return Status;
 
-    Status = uefi_call_wrapper(gBS->HandleProtocol, 3,
+    Status = uefi_call_wrapper(BS->HandleProtocol, 3,
                                LoadedImage->DeviceHandle,
                                &FsGuid, (VOID **)&FsProto);
     if (EFI_ERROR(Status)) return Status;
@@ -143,14 +142,14 @@ ReadConfigFile(EFI_HANDLE ImageHandle, CHAR8 **buf, UINTN *size)
     UINT64 fsize = ((EFI_FILE_INFO *)InfoBuf)->FileSize;
     if (fsize > 65536) fsize = 65536;
 
-    Status = uefi_call_wrapper(gBS->AllocatePool, 3, EfiLoaderData,
+    Status = uefi_call_wrapper(BS->AllocatePool, 3, EfiLoaderData,
                                (UINTN)fsize + 1, (VOID **)buf);
     if (EFI_ERROR(Status)) goto done;
 
     UINTN ReadSize = (UINTN)fsize;
     Status = uefi_call_wrapper(File->Read, 3, File, &ReadSize, *buf);
     if (EFI_ERROR(Status)) {
-        uefi_call_wrapper(gBS->FreePool, 1, *buf);
+        uefi_call_wrapper(BS->FreePool, 1, *buf);
         *buf = NULL;
         goto done;
     }
@@ -247,32 +246,27 @@ DefaultEntries(void)
 #define ATTR_NORMAL    EFI_TEXT_ATTR(EFI_LIGHTGRAY, EFI_BLACK)
 #define ATTR_SELECTED  EFI_TEXT_ATTR(EFI_BLACK,     EFI_LIGHTGRAY)
 
-static void SetAttr(UINTN a) { uefi_call_wrapper(gOut->SetAttribute, 2, gOut, a); }
-static void GotoXY(UINTN x, UINTN y) { uefi_call_wrapper(gOut->SetCursorPosition, 3, gOut, x, y); }
-static void PutS(CHAR16 *s) { uefi_call_wrapper(gOut->OutputString, 2, gOut, s); }
+static void SetAttr(UINTN a)
+{
+    uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, a);
+}
 
-/* Pixel-match the screenshot:
- *
- *   Please select the operating system to start:
- *
- *       [highlight bar with title]
- *       Other entry
- *       ...
- *
- *   Use ↑ and ↓ to move the highlight to your choice.
- *   Press ENTER to choose.
- *
- *   Seconds until highlighted choice will be started automatically: N
- *
- *
- *   For troubleshooting and advanced startup options for YetiOS, press F8.
- */
+static void GotoXY(UINTN x, UINTN y)
+{
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, x, y);
+}
+
+static void PutS(CHAR16 *s)
+{
+    uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, s);
+}
+
 static void
 DrawMenu(UINTN selected, INTN remaining)
 {
     SetAttr(ATTR_NORMAL);
-    uefi_call_wrapper(gOut->ClearScreen, 1, gOut);
-    uefi_call_wrapper(gOut->EnableCursor, 2, gOut, FALSE);
+    uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
+    uefi_call_wrapper(ST->ConOut->EnableCursor, 2, ST->ConOut, FALSE);
 
     GotoXY(0, 1);
     PutS(L"Please select the operating system to start:");
@@ -296,7 +290,6 @@ DrawMenu(UINTN selected, INTN remaining)
     UINTN after = row + gEntryCount + 1;
 
     GotoXY(0, after);
-    /* CP437 / Unicode arrows: U+2191 ↑, U+2193 ↓ */
     PutS(L"Use \x2191 and \x2193 to move the highlight to your choice.");
     GotoXY(0, after + 1);
     PutS(L"Press ENTER to choose.");
@@ -330,27 +323,26 @@ BootEntryRun(EFI_HANDLE ImageHandle, BootEntry *entry)
     EFI_DEVICE_PATH  *DevicePath;
     EFI_HANDLE        NewImage;
 
-    Status = uefi_call_wrapper(gBS->HandleProtocol, 3, ImageHandle,
+    Status = uefi_call_wrapper(BS->HandleProtocol, 3, ImageHandle,
                                &LoadedImageProtocol, (VOID **)&LoadedImage);
     if (EFI_ERROR(Status)) return Status;
 
     DevicePath = FileDevicePath(LoadedImage->DeviceHandle, entry->Kernel);
     if (!DevicePath) return EFI_OUT_OF_RESOURCES;
 
-    Status = uefi_call_wrapper(gBS->LoadImage, 6,
+    Status = uefi_call_wrapper(BS->LoadImage, 6,
                                FALSE, ImageHandle, DevicePath, NULL, 0,
                                &NewImage);
     if (EFI_ERROR(Status)) return Status;
 
-    Status = uefi_call_wrapper(gBS->HandleProtocol, 3, NewImage,
+    Status = uefi_call_wrapper(BS->HandleProtocol, 3, NewImage,
                                &LoadedImageProtocol, (VOID **)&LoadedImage);
     if (EFI_ERROR(Status)) return Status;
 
-    /* Linux EFI stub reads LoadOptions as a UCS-2 string. */
     LoadedImage->LoadOptions     = entry->Options;
     LoadedImage->LoadOptionsSize = (StrLen(entry->Options) + 1) * sizeof(CHAR16);
 
-    return uefi_call_wrapper(gBS->StartImage, 3, NewImage, NULL, NULL);
+    return uefi_call_wrapper(BS->StartImage, 3, NewImage, NULL, NULL);
 }
 
 /* -------------------------------------------------------------------- */
@@ -361,30 +353,26 @@ EFI_STATUS EFIAPI
 efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 {
     InitializeLib(ImageHandle, SystemTable);
-    gST  = SystemTable;
-    gBS  = SystemTable->BootServices;
-    gOut = SystemTable->ConOut;
-    gIn  = SystemTable->ConIn;
+    /* After InitializeLib, gnu-efi's globals ST, BS, RT are populated. */
 
-    /* Largest text mode available. */
     UINTN best_mode = 0, best_area = 0;
-    for (UINTN m = 0; m < (UINTN)gOut->Mode->MaxMode; m++) {
+    for (UINTN m = 0; m < (UINTN)ST->ConOut->Mode->MaxMode; m++) {
         UINTN c, r;
-        if (uefi_call_wrapper(gOut->QueryMode, 4, gOut, m, &c, &r)
+        if (uefi_call_wrapper(ST->ConOut->QueryMode, 4, ST->ConOut, m, &c, &r)
                 == EFI_SUCCESS && c * r > best_area) {
             best_area = c * r;
             best_mode = m;
         }
     }
-    uefi_call_wrapper(gOut->SetMode, 2, gOut, best_mode);
-    uefi_call_wrapper(gOut->QueryMode, 4, gOut, best_mode, &gCols, &gRows);
+    uefi_call_wrapper(ST->ConOut->SetMode, 2, ST->ConOut, best_mode);
+    uefi_call_wrapper(ST->ConOut->QueryMode, 4, ST->ConOut, best_mode,
+                      &gCols, &gRows);
 
-    /* Config: try file, fall back to defaults. */
     CHAR8 *cfgBuf = NULL;
     UINTN  cfgSize = 0;
     if (ReadConfigFile(ImageHandle, &cfgBuf, &cfgSize) == EFI_SUCCESS) {
         ParseConfig(cfgBuf, cfgSize);
-        uefi_call_wrapper(gBS->FreePool, 1, cfgBuf);
+        uefi_call_wrapper(BS->FreePool, 1, cfgBuf);
     }
     if (gEntryCount == 0) DefaultEntries();
     if (gDefault >= gEntryCount) gDefault = 0;
@@ -395,16 +383,16 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     DrawMenu(selected, remaining);
 
     EFI_EVENT timer;
-    uefi_call_wrapper(gBS->CreateEvent, 5,
+    uefi_call_wrapper(BS->CreateEvent, 5,
                       EVT_TIMER, 0, NULL, NULL, &timer);
-    uefi_call_wrapper(gBS->SetTimer, 3,
-                      timer, TimerPeriodic, 10000000ULL); /* 1s */
+    uefi_call_wrapper(BS->SetTimer, 3,
+                      timer, TimerPeriodic, 10000000ULL);
 
-    EFI_EVENT events[2] = { gIn->WaitForKey, timer };
+    EFI_EVENT events[2] = { ST->ConIn->WaitForKey, timer };
 
     for (;;) {
         UINTN idx;
-        uefi_call_wrapper(gBS->WaitForEvent, 3, 2, events, &idx);
+        uefi_call_wrapper(BS->WaitForEvent, 3, 2, events, &idx);
 
         if (idx == 1) {
             if (remaining > 0) {
@@ -417,10 +405,10 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         }
 
         EFI_INPUT_KEY key;
-        if (uefi_call_wrapper(gIn->ReadKeyStroke, 2, gIn, &key)
+        if (uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &key)
                 != EFI_SUCCESS) continue;
 
-        remaining = -1; /* user input cancels the countdown */
+        remaining = -1;
 
         if (key.ScanCode == SCAN_UP) {
             selected = (selected == 0) ? gEntryCount - 1 : selected - 1;
@@ -432,18 +420,17 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         DrawMenu(selected, remaining);
     }
 
-    uefi_call_wrapper(gBS->CloseEvent, 1, timer);
+    uefi_call_wrapper(BS->CloseEvent, 1, timer);
     SetAttr(ATTR_NORMAL);
-    uefi_call_wrapper(gOut->ClearScreen, 1, gOut);
+    uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
 
     EFI_STATUS Status = BootEntryRun(ImageHandle, &gEntries[selected]);
 
-    /* Only reached if the kernel handover failed. */
     Print(L"\nBoot failed: %r\nPress any key to reboot.\n", Status);
     EFI_INPUT_KEY k; UINTN idx;
-    uefi_call_wrapper(gBS->WaitForEvent, 3, 1, &gIn->WaitForKey, &idx);
-    uefi_call_wrapper(gIn->ReadKeyStroke, 2, gIn, &k);
-    uefi_call_wrapper(gST->RuntimeServices->ResetSystem, 4,
+    uefi_call_wrapper(BS->WaitForEvent, 3, 1, &ST->ConIn->WaitForKey, &idx);
+    uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &k);
+    uefi_call_wrapper(RT->ResetSystem, 4,
                       EfiResetCold, EFI_SUCCESS, 0, NULL);
     return EFI_SUCCESS;
 }
