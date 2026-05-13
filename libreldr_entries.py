@@ -12,10 +12,12 @@ which is forwarded as LoadOptions when libreldr hands off via StartImage().
 
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True)
 class Entry:
     title: str
     options: str  # kernel command line
+
 
 # UEFI paths are relative to the root of the ESP.
 # We use backslashes here to be explicitly UEFI-compliant.
@@ -30,10 +32,11 @@ _INITRD_ARG = f"initrd={INITRD_PATH}"
 #   - quiet                       silences kernel printk
 #   - loglevel=3                  belt-and-suspenders alongside quiet
 #   - vt.global_cursor_default=0  hides the text-mode cursor
+#   - udev.log_level=3            silences udev messages on the VT
 #
 # Only applied to entries that should boot silently. Debug/Log/RAM/Emergency
 # modes keep verbose kernel output so you can actually see what's happening.
-_SPLASH_ARGS = "quiet loglevel=3 vt.global_cursor_default=0"
+_SPLASH_ARGS = "quiet loglevel=3 vt.global_cursor_default=0 udev.log_level=3"
 
 # Defined entries for the boot menu
 ENTRIES = [
@@ -45,7 +48,7 @@ ENTRIES = [
 ]
 
 TIMEOUT_SECONDS = 5
-DEFAULT_INDEX = 0
+DEFAULT_INDEX   = 0
 
 
 def render_libreldr_conf() -> str:
@@ -61,7 +64,6 @@ def render_libreldr_conf() -> str:
         f"default {DEFAULT_INDEX}",
         "",
     ]
-
     for e in ENTRIES:
         # Always prepend the initrd= argument; the Linux EFI stub reads it
         # from its LoadOptions and pulls the initramfs from the ESP.
@@ -72,5 +74,4 @@ def render_libreldr_conf() -> str:
             f"options {full_options}",
             "",
         ]
-
     return "\n".join(lines)
