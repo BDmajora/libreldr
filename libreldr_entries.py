@@ -26,9 +26,18 @@ INITRD_PATH = r"\EFI\yetios\initramfs.img"
 # Linux EFI stub locates the initramfs on the ESP at hand-off.
 _INITRD_ARG = f"initrd={INITRD_PATH}"
 
+# Cmdline tokens that complement the SnowCone boot splash:
+#   - quiet                       silences kernel printk
+#   - loglevel=3                  belt-and-suspenders alongside quiet
+#   - vt.global_cursor_default=0  hides the text-mode cursor
+#
+# Only applied to entries that should boot silently. Debug/Log/RAM/Emergency
+# modes keep verbose kernel output so you can actually see what's happening.
+_SPLASH_ARGS = "quiet loglevel=3 vt.global_cursor_default=0"
+
 # Defined entries for the boot menu
 ENTRIES = [
-    Entry("YetiOS",                                   "root=LABEL=yetios-root ro quiet"),
+    Entry("YetiOS",                                   f"root=LABEL=yetios-root ro {_SPLASH_ARGS}"),
     Entry("YetiOS (Debug)",                           "root=LABEL=yetios-root rw debug"),
     Entry("YetiOS (Log file)",                        "root=LABEL=yetios-root ro console=ttyS0,115200"),
     Entry("YetiOS (RAM Disk)",                        "root=/dev/ram0 init=/sbin/init"),
