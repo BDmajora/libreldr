@@ -28,23 +28,44 @@ INITRD_PATH = r"\EFI\yetios\initramfs.img"
 # Linux EFI stub locates the initramfs on the ESP at hand-off.
 _INITRD_ARG = f"initrd={INITRD_PATH}"
 
-# Cmdline tokens that complement the SnowCone boot splash:
-#   - quiet                       silences kernel printk
-#   - loglevel=3                  belt-and-suspenders alongside quiet
+# Cmdline tokens that complement the snowcone boot splash. These are the
+# committed defaults; yeti-build stage 8 will overwrite this string at
+# install time using snowcone_integration.cmdline_addition() merged with
+# its own base tokens. Keep this list in sync with that integration so
+# standalone builds (and the diff printed by stage 8) stay sensible.
+#
+#   - quiet                       silences most kernel printk output
+#   - loglevel=0                  suppress ALL console kernel messages
+#                                 (anything that leaks through 'quiet')
 #   - vt.global_cursor_default=0  hides the text-mode cursor
-#   - udev.log_level=3            silences udev messages on the VT
+#   - udev.log_level=3            silences udev messages
+#   - rd.udev.log_level=3         same, but for the initramfs udev
+#   - fbcon=nodefer               don't print the fbcon banner
+#   - console=tty12               route kernel console output to tty12
+#                                 so anything that DOES print can't
+#                                 land on the splash (tty1)
 #
 # Only applied to entries that should boot silently. Debug/Log/RAM/Emergency
 # modes keep verbose kernel output so you can actually see what's happening.
-_SPLASH_ARGS = "quiet loglevel=3 vt.global_cursor_default=0 udev.log_level=3"
+_SPLASH_ARGS = "quiet loglevel=0 vt.global_cursor_default=0 udev.log_level=3 rd.udev.log_level=3 fbcon=nodefer console=tty12"
+
+# Verbose cmdline for diagnostic entries. The opposite of _SPLASH_ARGS:
+# put kernel messages back on tty1, crank loglevel up so we actually
+# see what went wrong, and don't redirect console anywhere.
+_DEBUG_ARGS = "loglevel=7 console=tty1"
 
 # Defined entries for the boot menu
 ENTRIES = [
-    Entry("YetiOS",                                   f"root=LABEL=yetios-root ro {_SPLASH_ARGS}"),
-    Entry("YetiOS (Debug)",                           "root=LABEL=yetios-root rw debug"),
-    Entry("YetiOS (Log file)",                        "root=LABEL=yetios-root ro console=ttyS0,115200"),
-    Entry("YetiOS (RAM Disk)",                        "root=/dev/ram0 init=/sbin/init"),
-    Entry("YetiOS (Emergency Management Services)",   "root=LABEL=yetios-root ro single"),
+    Entry("YetiOS",
+          f"root=LABEL=yetios-root ro {_SPLASH_ARGS}"),
+    Entry("YetiOS (Debug)",
+          f"root=LABEL=yetios-root rw debug {_DEBUG_ARGS}"),
+    Entry("YetiOS (Log file)",
+          "root=LABEL=yetios-root ro console=ttyS0,115200 loglevel=7"),
+    Entry("YetiOS (RAM Disk)",
+          f"root=/dev/ram0 init=/sbin/init {_DEBUG_ARGS}"),
+    Entry("YetiOS (Emergency Management Services)",
+          f"root=LABEL=yetios-root ro single {_DEBUG_ARGS}"),
 ]
 
 TIMEOUT_SECONDS = 5
