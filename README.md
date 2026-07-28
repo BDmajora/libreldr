@@ -115,4 +115,9 @@ BIOS (legacy SeaBIOS, QEMU's default):
   firmware, or sign with `sbsign` and enroll your key.
 - **F8 is cosmetic.** Both backends print the hint but neither wires up
   an advanced boot menu. Add it later if you want.
-- **Syslinux is GPL-2.0.** Same license as FreeLdr, so no friction.
+- **Legacy Syslinux integration.** Keep it out of the default permissive path
+  unless you intentionally add a separate component boundary.
+
+## License
+
+MIT License - YetiOS Project.
