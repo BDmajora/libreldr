@@ -8,7 +8,8 @@ Note: libreldr.c's parser understands `title`, `linux`, `chain`, `options`,
 `timeout`, and `default`. It has no `initrd` directive — the initramfs is
 passed to the Linux EFI stub via `initrd=` inside the kernel command line,
 which is forwarded as LoadOptions when libreldr hands off via StartImage().
-FreeBSD entries should use `chain` to hand off to loader.efi.
+FreeBSD entries use `chain` to hand off to loader.efi, and may pass loader
+boot flags such as `-m` through `options`.
 """
 
 from dataclasses import dataclass
@@ -110,5 +111,6 @@ def render_freebsd_chain_conf(loader_path: str = r"\EFI\freebsd\loader.efi") -> 
         "",
         "title YetiOS",
         f"chain {loader_path}",
+        "options -m",
         "",
     ])

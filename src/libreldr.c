@@ -38,6 +38,16 @@ static UINTN     gCols, gRows;
 
 #define ENTRY_INDENT       2
 
+#define ATTR_NORMAL    EFI_TEXT_ATTR(EFI_LIGHTGRAY, EFI_BLACK)
+#define ATTR_SELECTED  EFI_TEXT_ATTR(EFI_BLACK,     EFI_LIGHTGRAY)
+#define ATTR_HIDDEN    EFI_TEXT_ATTR(EFI_BLACK,     EFI_BLACK)
+
+/* Hide chainloaded loader text while preserving mode/protocol calls. */
+static SIMPLE_TEXT_OUTPUT_INTERFACE *gRealConOut = NULL;
+static SIMPLE_TEXT_OUTPUT_INTERFACE *gRealStdErr = NULL;
+static SIMPLE_TEXT_OUTPUT_INTERFACE  gMutedConOut;
+static BOOLEAN                       gConsoleMuted = FALSE;
+
 /* -------------------------------------------------------------------- */
 /* Helpers                                                              */
 /* -------------------------------------------------------------------- */
@@ -83,6 +93,124 @@ static void PutCh(CHAR16 c) {
 
 static void Spaces(UINTN count) {
     for (UINTN i = 0; i < count; i++) PutCh(L' ');
+}
+
+static EFI_STATUS EFIAPI MutedConsoleReset(
+    SIMPLE_TEXT_OUTPUT_INTERFACE *This,
+    BOOLEAN ExtendedVerification
+) {
+    EFI_STATUS Status;
+
+    if (!gRealConOut) return EFI_UNSUPPORTED;
+    Status = uefi_call_wrapper(gRealConOut->Reset, 2, gRealConOut, ExtendedVerification);
+    if (!EFI_ERROR(Status)) {
+        uefi_call_wrapper(gRealConOut->SetAttribute, 2, gRealConOut, ATTR_HIDDEN);
+        uefi_call_wrapper(gRealConOut->ClearScreen, 1, gRealConOut);
+        uefi_call_wrapper(gRealConOut->EnableCursor, 2, gRealConOut, FALSE);
+    }
+    return Status;
+}
+
+static EFI_STATUS EFIAPI MutedConsoleOutputString(
+    SIMPLE_TEXT_OUTPUT_INTERFACE *This,
+    CHAR16 *String
+) {
+    return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI MutedConsoleTestString(
+    SIMPLE_TEXT_OUTPUT_INTERFACE *This,
+    CHAR16 *String
+) {
+    return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI MutedConsoleQueryMode(
+    SIMPLE_TEXT_OUTPUT_INTERFACE *This,
+    UINTN ModeNumber,
+    UINTN *Columns,
+    UINTN *Rows
+) {
+    if (!gRealConOut) return EFI_UNSUPPORTED;
+    return uefi_call_wrapper(gRealConOut->QueryMode, 4, gRealConOut, ModeNumber, Columns, Rows);
+}
+
+static EFI_STATUS EFIAPI MutedConsoleSetMode(
+    SIMPLE_TEXT_OUTPUT_INTERFACE *This,
+    UINTN ModeNumber
+) {
+    EFI_STATUS Status;
+
+    if (!gRealConOut) return EFI_UNSUPPORTED;
+    Status = uefi_call_wrapper(gRealConOut->SetMode, 2, gRealConOut, ModeNumber);
+    if (!EFI_ERROR(Status)) {
+        gMutedConOut.Mode = gRealConOut->Mode;
+        uefi_call_wrapper(gRealConOut->SetAttribute, 2, gRealConOut, ATTR_HIDDEN);
+        uefi_call_wrapper(gRealConOut->ClearScreen, 1, gRealConOut);
+        uefi_call_wrapper(gRealConOut->EnableCursor, 2, gRealConOut, FALSE);
+    }
+    return Status;
+}
+
+static EFI_STATUS EFIAPI MutedConsoleSetAttribute(
+    SIMPLE_TEXT_OUTPUT_INTERFACE *This,
+    UINTN Attribute
+) {
+    return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI MutedConsoleClearScreen(
+    SIMPLE_TEXT_OUTPUT_INTERFACE *This
+) {
+    if (!gRealConOut) return EFI_UNSUPPORTED;
+    uefi_call_wrapper(gRealConOut->SetAttribute, 2, gRealConOut, ATTR_HIDDEN);
+    return uefi_call_wrapper(gRealConOut->ClearScreen, 1, gRealConOut);
+}
+
+static EFI_STATUS EFIAPI MutedConsoleSetCursorPosition(
+    SIMPLE_TEXT_OUTPUT_INTERFACE *This,
+    UINTN Column,
+    UINTN Row
+) {
+    if (!gRealConOut) return EFI_UNSUPPORTED;
+    return uefi_call_wrapper(gRealConOut->SetCursorPosition, 3, gRealConOut, Column, Row);
+}
+
+static EFI_STATUS EFIAPI MutedConsoleEnableCursor(
+    SIMPLE_TEXT_OUTPUT_INTERFACE *This,
+    BOOLEAN Visible
+) {
+    if (!gRealConOut) return EFI_UNSUPPORTED;
+    return uefi_call_wrapper(gRealConOut->EnableCursor, 2, gRealConOut, FALSE);
+}
+
+static void MuteConsoleForHandoff(void) {
+    if (gConsoleMuted || !ST || !ST->ConOut) return;
+
+    gRealConOut = ST->ConOut;
+    gRealStdErr = ST->StdErr;
+    gMutedConOut.Reset             = MutedConsoleReset;
+    gMutedConOut.OutputString      = MutedConsoleOutputString;
+    gMutedConOut.TestString        = MutedConsoleTestString;
+    gMutedConOut.QueryMode         = MutedConsoleQueryMode;
+    gMutedConOut.SetMode           = MutedConsoleSetMode;
+    gMutedConOut.SetAttribute      = MutedConsoleSetAttribute;
+    gMutedConOut.ClearScreen       = MutedConsoleClearScreen;
+    gMutedConOut.SetCursorPosition = MutedConsoleSetCursorPosition;
+    gMutedConOut.EnableCursor      = MutedConsoleEnableCursor;
+    gMutedConOut.Mode              = gRealConOut->Mode;
+
+    ST->ConOut = &gMutedConOut;
+    ST->StdErr = &gMutedConOut;
+    gConsoleMuted = TRUE;
+}
+
+static void RestoreConsoleAfterHandoff(void) {
+    if (!gConsoleMuted) return;
+
+    ST->ConOut = gRealConOut;
+    ST->StdErr = gRealStdErr;
+    gConsoleMuted = FALSE;
 }
 
 /* -------------------------------------------------------------------- */
@@ -191,10 +319,6 @@ static void ParseConfig(const CHAR8 *buf, UINTN size) {
 /* -------------------------------------------------------------------- */
 /* UI                                                                   */
 /* -------------------------------------------------------------------- */
-
-#define ATTR_NORMAL    EFI_TEXT_ATTR(EFI_LIGHTGRAY, EFI_BLACK)
-#define ATTR_SELECTED  EFI_TEXT_ATTR(EFI_BLACK,     EFI_LIGHTGRAY)
-#define ATTR_HIDDEN    EFI_TEXT_ATTR(EFI_BLACK,     EFI_BLACK)
 
 #define ROW_HEADER      0
 #define ROW_FIRST_ENTRY 2
@@ -309,7 +433,7 @@ static EFI_STATUS BootEntryRun(EFI_HANDLE ImageHandle, BootEntry *entry) {
                                &LoadedImageProtocol, (VOID **)&LoadedImage);
     if (EFI_ERROR(Status)) return Status;
 
-    if (entry->Type == ENTRY_TYPE_LINUX) {
+    if (entry->Options[0] != 0) {
         LoadedImage->LoadOptions     = entry->Options;
         LoadedImage->LoadOptionsSize = (StrLen(entry->Options) + 1) * sizeof(CHAR16);
     } else {
@@ -318,7 +442,12 @@ static EFI_STATUS BootEntryRun(EFI_HANDLE ImageHandle, BootEntry *entry) {
     }
 
     PrepareHandoffScreen();
-    return uefi_call_wrapper(BS->StartImage, 3, NewImage, NULL, NULL);
+    if (entry->Type == ENTRY_TYPE_CHAIN)
+        MuteConsoleForHandoff();
+    Status = uefi_call_wrapper(BS->StartImage, 3, NewImage, NULL, NULL);
+    if (entry->Type == ENTRY_TYPE_CHAIN)
+        RestoreConsoleAfterHandoff();
+    return Status;
 }
 
 /* -------------------------------------------------------------------- */
