@@ -194,6 +194,7 @@ static void ParseConfig(const CHAR8 *buf, UINTN size) {
 
 #define ATTR_NORMAL    EFI_TEXT_ATTR(EFI_LIGHTGRAY, EFI_BLACK)
 #define ATTR_SELECTED  EFI_TEXT_ATTR(EFI_BLACK,     EFI_LIGHTGRAY)
+#define ATTR_HIDDEN    EFI_TEXT_ATTR(EFI_BLACK,     EFI_BLACK)
 
 #define ROW_HEADER      0
 #define ROW_FIRST_ENTRY 2
@@ -273,6 +274,13 @@ static void DrawCountdown(INTN remaining) {
     }
 }
 
+static void PrepareHandoffScreen(void) {
+    uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_HIDDEN);
+    uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
+    uefi_call_wrapper(ST->ConOut->SetCursorPosition, 3, ST->ConOut, 0, 0);
+    uefi_call_wrapper(ST->ConOut->EnableCursor, 2, ST->ConOut, FALSE);
+}
+
 /* -------------------------------------------------------------------- */
 /* Boot execution                                                       */
 /* -------------------------------------------------------------------- */
@@ -309,6 +317,7 @@ static EFI_STATUS BootEntryRun(EFI_HANDLE ImageHandle, BootEntry *entry) {
         LoadedImage->LoadOptionsSize = 0;
     }
 
+    PrepareHandoffScreen();
     return uefi_call_wrapper(BS->StartImage, 3, NewImage, NULL, NULL);
 }
 
@@ -394,9 +403,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     }
 
     uefi_call_wrapper(BS->CloseEvent, 1, timer);
-    uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
 
     EFI_STATUS Status = BootEntryRun(ImageHandle, &gEntries[selected]);
+    uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
+    uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
     Print(L"Boot failed: %r\n", Status);
 
     EFI_EVENT pause;
