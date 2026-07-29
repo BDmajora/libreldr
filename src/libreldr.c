@@ -35,6 +35,7 @@ static UINTN     gEntryCount = 0;
 static UINTN     gDefault    = 0;
 static INTN      gTimeout    = 10;
 static UINTN     gCols, gRows;
+static BOOLEAN   gQuiet      = FALSE;
 
 #define ENTRY_INDENT       2
 
@@ -74,6 +75,13 @@ static INTN ParseInt(const CHAR8 *s, UINTN len) {
         v = v * 10 + (s[i] - '0');
     }
     return neg ? -v : v;
+}
+
+static BOOLEAN ParseBool(const CHAR8 *s, UINTN len) {
+    return StrEqA(s, len, "1") ||
+           StrEqA(s, len, "yes") ||
+           StrEqA(s, len, "true") ||
+           StrEqA(s, len, "on");
 }
 
 static void PutCh(CHAR16 c) {
@@ -167,6 +175,8 @@ static void ParseConfig(const CHAR8 *buf, UINTN size) {
             gTimeout = ParseInt(val, vallen);
         } else if (StrEqA(line, k, "default")) {
             gDefault = (UINTN)ParseInt(val, vallen);
+        } else if (StrEqA(line, k, "quiet")) {
+            gQuiet = ParseBool(val, vallen);
         } else if (StrEqA(line, k, "title")) {
             if (gEntryCount < MAX_ENTRIES) {
                 cur = &gEntries[gEntryCount++];
@@ -344,7 +354,19 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     if (gEntryCount == 0) return EFI_NOT_FOUND;
 
     UINTN selected  = gDefault;
+    if (selected >= gEntryCount) selected = 0;
     INTN  remaining = gTimeout;
+
+    if (gQuiet) {
+        uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, ATTR_NORMAL);
+        uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
+        uefi_call_wrapper(ST->ConOut->EnableCursor, 2, ST->ConOut, FALSE);
+
+        EFI_STATUS Status = BootEntryRun(ImageHandle, &gEntries[selected]);
+        Print(L"Boot failed: %r\n", Status);
+        uefi_call_wrapper(RT->ResetSystem, 4, EfiResetCold, EFI_SUCCESS, 0, NULL);
+        return EFI_SUCCESS;
+    }
 
     DrawMenuFull(selected);
     DrawCountdown(remaining);
