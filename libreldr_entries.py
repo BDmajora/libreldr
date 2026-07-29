@@ -5,7 +5,7 @@ Single source of truth for UEFI-only libreldr boot entries.
 This generates the libreldr.conf file read by libreldr.efi.
 
 Note: libreldr.c's parser understands `title`, `linux`, `chain`, `options`,
-`timeout`, `default`, and `quiet`. It has no `initrd` directive — the initramfs is
+`timeout`, and `default`. It has no `initrd` directive — the initramfs is
 passed to the Linux EFI stub via `initrd=` inside the kernel command line,
 which is forwarded as LoadOptions when libreldr hands off via StartImage().
 FreeBSD entries should use `chain` to hand off to loader.efi.
@@ -107,7 +107,6 @@ def render_freebsd_chain_conf(loader_path: str = r"\EFI\freebsd\loader.efi") -> 
         "",
         "timeout 5",
         "default 0",
-        "quiet yes",
         "",
         "title YetiOS",
         f"chain {loader_path}",
