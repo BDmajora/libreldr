@@ -4,6 +4,8 @@
 #   sudo apt install gnu-efi build-essential binutils
 
 ARCH      := $(shell uname -m)
+EFI_ARCH  := $(ARCH)
+BFD_ARCH  := elf64-x86-64
 
 # ---- UEFI configuration (gnu-efi) ------------------------------------------
 EFIINC    := /usr/include/efi
@@ -45,7 +47,7 @@ libreldr.so: src/libreldr.o
 	$(LD) $(EFI_LDFLAGS) $^ -o $@ -lefi -lgnuefi
 
 libreldr.efi: libreldr.so
-	objcopy $(OBJCOPY_SECTIONS) --target=efi-app-$(ARCH) $< $@
+	objcopy -I $(BFD_ARCH) -O efi-app-$(EFI_ARCH) $(OBJCOPY_SECTIONS) $< $@
 
 clean:
 	rm -f src/*.o libreldr.so libreldr.efi

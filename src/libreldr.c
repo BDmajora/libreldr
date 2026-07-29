@@ -1,6 +1,8 @@
 /*
  * libreldr — a UEFI-only bootloader for YetiOS.
- * Hand-off model: Loads Linux kernels via the EFI stub (LoadImage + StartImage).
+ * Hand-off model:
+ *   - Loads Linux kernels via the EFI stub (LoadImage + StartImage).
+ *   - Chainloads another EFI program, such as FreeBSD loader.efi.
  *
  * UI mimics ReactOS FreeLoader:
  *   - Entries indented 2 spaces.
@@ -20,8 +22,13 @@ typedef struct {
     CHAR16 Title[MAX_TITLE];
     CHAR16 Kernel[MAX_PATH_LEN];
     CHAR16 Options[MAX_OPTS];
+    UINTN  Type;
     BOOLEAN Used;
 } BootEntry;
+
+#define ENTRY_TYPE_NONE   0
+#define ENTRY_TYPE_LINUX  1
+#define ENTRY_TYPE_CHAIN  2
 
 static BootEntry gEntries[MAX_ENTRIES];
 static UINTN     gEntryCount = 0;
@@ -164,11 +171,17 @@ static void ParseConfig(const CHAR8 *buf, UINTN size) {
             if (gEntryCount < MAX_ENTRIES) {
                 cur = &gEntries[gEntryCount++];
                 cur->Used = TRUE;
+                cur->Type = ENTRY_TYPE_NONE;
                 AsciiToUcs2(val, vallen, cur->Title, MAX_TITLE);
             }
         } else if (StrEqA(line, k, "linux") && cur) {
             AsciiToUcs2(val, vallen, cur->Kernel, MAX_PATH_LEN);
             NormalizePath(cur->Kernel);
+            cur->Type = ENTRY_TYPE_LINUX;
+        } else if (StrEqA(line, k, "chain") && cur) {
+            AsciiToUcs2(val, vallen, cur->Kernel, MAX_PATH_LEN);
+            NormalizePath(cur->Kernel);
+            cur->Type = ENTRY_TYPE_CHAIN;
         } else if (StrEqA(line, k, "options") && cur) {
             AsciiToUcs2(val, vallen, cur->Options, MAX_OPTS);
         }
@@ -270,6 +283,9 @@ static EFI_STATUS BootEntryRun(EFI_HANDLE ImageHandle, BootEntry *entry) {
     EFI_DEVICE_PATH  *DevicePath;
     EFI_HANDLE        NewImage;
 
+    if (entry->Type == ENTRY_TYPE_NONE || entry->Kernel[0] == 0)
+        return EFI_INVALID_PARAMETER;
+
     Status = uefi_call_wrapper(BS->HandleProtocol, 3, ImageHandle,
                                &LoadedImageProtocol, (VOID **)&LoadedImage);
     if (EFI_ERROR(Status)) return Status;
@@ -285,8 +301,13 @@ static EFI_STATUS BootEntryRun(EFI_HANDLE ImageHandle, BootEntry *entry) {
                                &LoadedImageProtocol, (VOID **)&LoadedImage);
     if (EFI_ERROR(Status)) return Status;
 
-    LoadedImage->LoadOptions     = entry->Options;
-    LoadedImage->LoadOptionsSize = (StrLen(entry->Options) + 1) * sizeof(CHAR16);
+    if (entry->Type == ENTRY_TYPE_LINUX) {
+        LoadedImage->LoadOptions     = entry->Options;
+        LoadedImage->LoadOptionsSize = (StrLen(entry->Options) + 1) * sizeof(CHAR16);
+    } else {
+        LoadedImage->LoadOptions     = NULL;
+        LoadedImage->LoadOptionsSize = 0;
+    }
 
     return uefi_call_wrapper(BS->StartImage, 3, NewImage, NULL, NULL);
 }

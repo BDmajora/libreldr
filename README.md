@@ -1,122 +1,79 @@
 # libreldr
 
-A FreeLdr-styled bootloader for YetiOS. One name, one config, one menu —
-works on both UEFI and BIOS systems.
+`libreldr` is the YetiOS UEFI boot menu. It draws a FreeLdr-styled text menu
+and starts the selected EFI program.
 
-The user sees a single boot manager that pixel-matches ReactOS FreeLdr's
-MinimalUI: black screen, white text, inverse-video selection bar,
-countdown line, F8 hint at the bottom.
+For the current FreeBSD-based YetiOS image, `libreldr` is installed as:
 
-## Architecture
+```text
+EFI/BOOT/BOOTX64.EFI
+EFI/libreldr/libreldr.efi
+EFI/libreldr/libreldr.conf
+```
 
-`libreldr` is delivered as **two backends presenting one front-end:**
+The default YetiOS entry chainloads FreeBSD's `loader.efi`:
 
-- **UEFI:** `libreldr.efi` — a small gnu-efi program (~500 lines C)
-  that draws the FreeLdr menu and hands control to Linux via the
-  kernel's built-in EFI stub. This is the file in `src/libreldr.c`.
+```text
+timeout 5
+default 0
 
-- **BIOS:** syslinux + a themed `menu.c32` config that mirrors the
-  same look, the same wording, the same colors. Syslinux already
-  implements the BIOS Linux boot protocol — we just present its menu
-  as "libreldr" via branding in the config. The user never sees
-  "syslinux" anywhere on screen.
+title YetiOS
+chain \EFI\freebsd\loader.efi
+```
 
-Both backends read the same logical entries (defined once in your build
-script), produced into the two configs Stage 7 writes during the install.
-
-This is "libreldr" the *product*. The fact that two implementations live
-underneath is an implementation detail.
+Linux EFI-stub entries are still supported with the existing `linux` and
+`options` directives, but the FreeBSD path uses `chain`.
 
 ## Build
 
-The UEFI side:
+```bash
+make
+```
 
-    sudo apt install gnu-efi build-essential binutils
-    make
+Output:
 
-Output: `libreldr.efi`.
+```text
+libreldr.efi
+```
 
-The BIOS side has no build step. Syslinux is installed in the target
-during package install (the `sys-boot/syslinux` package is already in
-your `YETI_PACKAGE_LIST`).
+The current Makefile expects a gnu-efi style development environment with
+`cc`, `ld`, `objcopy`, and the gnu-efi headers/libraries available.
 
-## Install layout
+## Dependency Status
 
-For a hybrid BIOS+UEFI image, your `/boot` partition (FAT32, marked
-bootable, with the ESP flag set) ends up like:
+The current UEFI binary links against `gnu-efi` startup/support objects:
 
-    /EFI/BOOT/BOOTX64.EFI            <- libreldr.efi (UEFI)
-    /EFI/libreldr/libreldr.conf     <- UEFI menu config
-    /EFI/yetios/vmlinuz.efi          <- kernel (renamed copy of vmlinuz)
-    /vmlinuz                         <- kernel (BIOS path)
-    /initramfs.img                   <- initrd (BIOS path)
-    /syslinux.cfg                    <- BIOS menu config (libreldr-themed)
-    /ldlinux.sys                     <- syslinux core (written by `syslinux`)
-    /menu.c32                        <- syslinux text-menu module
-    /libcom32.c32                    <- syslinux runtime
-    /libutil.c32                     <- syslinux runtime
+```text
+crt0-efi-*.o
+libefi
+libgnuefi
+```
 
-The MBR boot stub (`mbr.bin`, dd'd at offset 0) hands off to syslinux
-on BIOS systems. UEFI firmware reads the GPT, finds the ESP, and
-launches `BOOTX64.EFI` directly. The same FAT partition serves both.
+The `gnu-efi` project is listed upstream as BSD licensed, so this is not a GPL
+runtime dependency. However, it is still a `gnu-efi` dependency. If the YetiOS
+commercial base requires no GNU-named dependency at all, the next `libreldr`
+milestone is to replace `gnu-efi` with YetiOS-owned minimal UEFI definitions and
+startup code or another reviewed permissive-only UEFI support layer.
 
-## How to integrate with yeti-build
+## Config Directives
 
-Replace `src/stage_07_bootloader.py` with the version in
-`integration/stage_07_bootloader.py`. The key changes:
+```text
+timeout SECONDS
+default INDEX
+title DISPLAY NAME
+chain \EFI\path\to\program.efi
+linux \EFI\path\to\vmlinuz.efi
+options kernel command line
+```
 
-1. The image partition table becomes GPT (with a BIOS Boot Partition
-   for the syslinux core, plus an ESP for both backends).
-2. Stage 2 (`stage_02_image.py`) needs an updated `parted` invocation
-   — see `integration/stage_02_image.py` for the new partition layout.
-3. Stage 7 now: copies `libreldr.efi` and `libreldr.conf` to the ESP,
-   copies the syslinux .c32 modules from the target, writes a themed
-   `syslinux.cfg`, installs the syslinux MBR.
-
-The kernel command line, default entry, and timeout live in
-`integration/libreldr_entries.py` — that single Python file is the
-source of truth, and Stage 7 generates both `libreldr.conf` (UEFI) and
-`syslinux.cfg` (BIOS) from it. Edit entries in one place.
-
-## Visual fidelity
-
-The two backends render through different code paths but produce visually
-matching output:
-
-- Both use 80-column text mode, black background, light-gray text.
-- Both put an inverse-video selection bar on the chosen entry.
-- Both display the same header ("Please select the operating system to
-  start:"), help lines, countdown line, and F8 hint.
-
-Minor differences you'll see in practice:
-
-- The exact pixel font is firmware-dependent (UEFI text mode and BIOS
-  VGA text mode use different glyphs).
-- Syslinux's arrow keys behave identically; F8 on BIOS is a no-op (same
-  as on UEFI — the hint is cosmetic on both backends today).
-
-## Test with QEMU
-
-UEFI (with OVMF):
-
-    sudo apt install ovmf
-    qemu-system-x86_64 -enable-kvm -m 4G \
-        -bios /usr/share/OVMF/OVMF_CODE.fd \
-        -drive file=build/yetios.img,format=raw
-
-BIOS (legacy SeaBIOS, QEMU's default):
-
-    qemu-system-x86_64 -enable-kvm -m 4G \
-        -drive file=build/yetios.img,format=raw
+Use `chain` for FreeBSD `loader.efi`. Use `linux` plus `options` for Linux
+EFI-stub kernels.
 
 ## Caveats
 
-- **No Secure Boot.** The .efi isn't signed. Disable Secure Boot in
-  firmware, or sign with `sbsign` and enroll your key.
-- **F8 is cosmetic.** Both backends print the hint but neither wires up
-  an advanced boot menu. Add it later if you want.
-- **Legacy Syslinux integration.** Keep it out of the default permissive path
-  unless you intentionally add a separate component boundary.
+- Secure Boot is not wired up yet; the EFI binary is unsigned.
+- F8 is currently only a visual hint.
+- BIOS/Syslinux integration is outside the current permissive YetiOS base path.
 
 ## License
 
